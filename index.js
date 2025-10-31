@@ -9,35 +9,34 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 
-const TABLE_NAME = "trades"; // we’ll create it later
+const TABLE_NAME = "trades";
 
-// ✅ Confirm server is online
-app.get("/", (req, res) => res.send("Atenza Trading Telegram Sync running..."));
+app.get("/", (req, res) => res.send("✅ Atenza Trading Sync is Live"));
 
-// ✅ Telegram Webhook endpoint
 app.post(`/telegram/${TELEGRAM_BOT_TOKEN}`, async (req, res) => {
-  const message = req.body.message;
-  if (!message || !message.text) return res.sendStatus(200);
+  const msg = req.body.message;
+  if (!msg || !msg.text) return res.sendStatus(200);
 
+  const tradeText = msg.text;
   try {
-    const tradeText = message.text;
-
-    // Insert to Supabase
-    const response = await fetch(`${SUPABASE_URL}/rest/v1/${TABLE_NAME}`, {
+    await fetch(`${SUPABASE_URL}/rest/v1/${TABLE_NAME}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "apikey": SUPABASE_KEY,
         "Authorization": `Bearer ${SUPABASE_KEY}`
       },
-      body: JSON.stringify({ raw_text: tradeText, timestamp: new Date().toISOString() })
+      body: JSON.stringify({
+        raw_text: tradeText,
+        message_id: msg.message_id,
+        chat_id: msg.chat.id,
+        date: new Date().toISOString()
+      })
     });
-
-    console.log("Trade saved:", tradeText);
-  } catch (e) {
-    console.error("Error saving trade:", e);
+    console.log("✅ Trade saved:", tradeText.slice(0, 50));
+  } catch (err) {
+    console.error("❌ Error saving trade:", err);
   }
-
   res.sendStatus(200);
 });
 

@@ -12,7 +12,7 @@ const TELEGRAM_TOKEN = "8428884587:AAFmiTY0gPtH0kenAgxmi71n26Wqbg46oHA";
 
 // --- SUPABASE SAVE FUNCTION --- //
 async function saveTrade(messageText) {
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/trades`, {
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/trade_data`, {
     method: "POST",
     headers: {
       "apikey": SUPABASE_KEY,

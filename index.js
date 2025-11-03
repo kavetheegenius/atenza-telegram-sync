@@ -1,66 +1,134 @@
-bot.on("message", async (msg) => {
-  const text = msg.text || "";
-  const chat = msg.chat?.title || msg.chat?.username || msg.chat?.id;
+// index.js
+import express from "express";
+import fetch from "node-fetch";
+import { DateTime } from "luxon";
 
-  console.log("📩 New message:", text.slice(0, 60), "...");
-  console.log("👤 From:", chat);
+const app = express();
+app.use(express.json());
 
-  // Only process "Daily Report" or misspelled versions
-  if (!/daily\s*report|dialy\s*report/i.test(text)) {
-    console.log("⏭ Not a daily report, skipped.");
-    return;
-  }
+// 🔑 Environment variables
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_KEY;
+const BOT_TOKEN = process.env.BOT_TOKEN;
 
+// 🧠 Telegram Webhook Handler
+app.post(`/telegram/${BOT_TOKEN}`, async (req, res) => {
   try {
-    const reportDateMatch = text.match(/🗓\s*(.+)/);
-    const reportDate = reportDateMatch ? reportDateMatch[1].trim() : null;
+    const update = req.body;
+    if (!update.message || !update.message.text) return res.sendStatus(200);
 
-    // Detect session blocks dynamically
-    const sessionBlocks = text.split(/🌑|🌤|☀️|🌙/g).slice(1);
-    const sessionTitles = ["Overnight Session", "Morning Session", "Afternoon Session", "Night Session"];
+    const messageText = update.message.text.trim();
+    const chatId = update.message.chat.id;
 
-    for (let i = 0; i < sessionBlocks.length; i++) {
-      const sessionName = sessionTitles[i];
-      const lines = sessionBlocks[i]
-        .split("\n")
-        .map((l) => l.trim())
-        .filter((l) => l.startsWith("✅") || l.startsWith("❌"));
+    // 🧾 Only handle daily report messages (allow for typos like "Dialy")
+    if (!/DAI?LY REPORT/i.test(messageText)) {
+      return res.sendStatus(200);
+    }
 
-      for (const line of lines) {
-        // Regex for ✅⁰ 00:35 • 🇪🇺 EUR/USD 🇺🇸 OTC • Buy
-        const tradeMatch = line.match(/(✅|❌)[⁰¹²³]?\s*(\d{2}:\d{2}).*?([A-Z]{3}\/[A-Z]{3}).*?(Buy|Sell)/i);
-        if (!tradeMatch) {
-          console.log("❌ Skipped unmatched line:", line);
-          continue;
-        }
+    console.log("📩 New daily report detected");
 
-        const result = tradeMatch[1] === "✅" ? "win" : "loss";
-        const time = tradeMatch[2];
-        const pair = tradeMatch[3];
-        const action = tradeMatch[4];
-        const martingaleMatch = line.match(/⁰|¹|²|³/);
-        const martingale = martingaleMatch ? "⁰¹²³".indexOf(martingaleMatch[0]) : 0;
+    // Extract report date
+    const dateMatch = messageText.match(/🗓\s*(.+)/);
+    const reportDate = dateMatch ? dateMatch[1].trim() : null;
 
-        const { error } = await supabase.from("trades_data").insert([
-          {
-            message_id: msg.message_id,
-            report_date: reportDate,
-            session: sessionName,
-            time,
-            pair,
-            action,
-            martingale,
-            result,
-            source: chat,
-            message: text,
+    // Split by session (🌑 OVERNIGHT, 🌤 MORNING, ☀️ AFTERNOON, 🌙 NIGHT)
+    const sessions = messageText.split(/(?=🌑|🌤|☀️|🌙)/g);
+    let totalTrades = 0;
+
+    for (const sessionBlock of sessions) {
+      const sessionMatch = sessionBlock.match(/(🌑|🌤|☀️|🌙)\s+([A-Z ]+)/);
+      if (!sessionMatch) continue;
+      const session = sessionMatch[2].trim();
+
+      const tradeLines = sessionBlock.split("\n").filter((l) => /✅|❌/.test(l));
+      let savedCount = 0;
+
+      for (const line of tradeLines) {
+        const tradeMatch = line.match(
+          /(✅|❌)(\d*)\s+([\d:.]+)\s+•\s+(.+?)\s+•\s+(Buy|Sell)/i
+        );
+        if (!tradeMatch) continue;
+
+        const [, winSymbol, martingaleStr, time, pairRaw, action] = tradeMatch;
+        const result = winSymbol === "✅" ? "Win" : "Loss";
+        const martingale = martingaleStr ? parseInt(martingaleStr) : 0;
+        const pair = pairRaw.replace(/[🇦-🇿]/g, "").replace(/OTC/gi, "").trim();
+
+        // Convert to UTC-4 timezone
+        const timestamp = DateTime.now().setZone("UTC-4").toISO();
+
+        const payload = {
+          message_id: update.message.message_id,
+          report_date: reportDate,
+          session,
+          time,
+          pair,
+          action,
+          martingale,
+          result,
+          source: "Telegram",
+          message: line,
+          timestamp,
+        };
+
+        console.log("🧾 Parsed trade:", payload);
+
+        const response = await fetch(`${SUPABASE_URL}/rest/v1/trades_data`, {
+          method: "POST",
+          headers: {
+            apikey: SUPABASE_KEY,
+            Authorization: `Bearer ${SUPABASE_KEY}`,
+            "Content-Type": "application/json",
+            Prefer: "return=minimal",
           },
-        ]);
+          body: JSON.stringify(payload),
+        });
 
-        if (error) console.error("❌ Supabase insert error:", error);
-        else console.log(`✅ Saved: ${pair} ${action} (${sessionName})`);
+        if (response.ok) {
+          savedCount++;
+          totalTrades++;
+        } else {
+          const errorText = await response.text();
+          console.error("❌ Supabase insert failed:", errorText);
+        }
+      }
+
+      // ✅ Send per-session confirmation
+      if (savedCount > 0) {
+        await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: `✅ ${savedCount} trades imported from ${session} session.`,
+          }),
+        });
       }
     }
+
+    // ✅ Final summary message
+    if (totalTrades > 0) {
+      await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: `✅ Total ${totalTrades} trades imported across all sessions.`,
+        }),
+      });
+    }
+
+    res.sendStatus(200);
   } catch (err) {
-    console.error("⚠️ Parse error:", err);
+    console.error("💥 Telegram webhook error:", err);
+    res.sendStatus(500);
   }
 });
+
+// 🌐 Health check
+app.get("/", (req, res) => res.send("Atenza Telegram Sync running ✅"));
+app.get("/healthz", (req, res) => res.sendStatus(200));
+
+// 🚀 Start server
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));

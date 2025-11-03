@@ -1,15 +1,29 @@
 {
   "name": "atenza-telegram-sync",
   "version": "1.0.0",
-  "type": "module",
+  "description": "A Telegram-to-Supabase trade log sync service using Express, Telegraf, and Luxon.",
   "main": "index.js",
-  "dependencies": {
-    "@supabase/supabase-js": "^2.43.1",
-    "express": "^4.21.1",
-    "luxon": "^3.5.0",
-    "node-telegram-bot-api": "^0.66.0"
-  },
+  "type": "module",
   "scripts": {
     "start": "node index.js"
-  }
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "express": "^4.19.2",
+    "luxon": "^3.5.0",
+    "telegraf": "^4.16.3"
+  },
+  "engines": {
+    "node": ">=18.x"
+  },
+  "keywords": [
+    "telegram",
+    "supabase",
+    "express",
+    "luxon",
+    "bot",
+    "sync"
+  ],
+  "author": "kavetheegenius",
+  "license": "MIT"
 }

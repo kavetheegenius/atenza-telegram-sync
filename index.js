@@ -3,6 +3,16 @@ import TelegramBot from "node-telegram-bot-api";
 import pkg from "@supabase/supabase-js";
 import { DateTime } from "luxon";
 
+import dotenv from "dotenv";
+dotenv.config();
+
+console.log("🔍 ENV CHECK START");
+console.log("TELEGRAM_TOKEN:", process.env.TELEGRAM_TOKEN ? "✅ Loaded" : "❌ Missing");
+console.log("SUPABASE_URL:", process.env.SUPABASE_URL ? "✅ Loaded" : "❌ Missing");
+console.log("SUPABASE_KEY:", process.env.SUPABASE_KEY ? "✅ Loaded" : "❌ Missing");
+console.log("WEBHOOK_URL:", process.env.WEBHOOK_URL ? "✅ Loaded" : "❌ Missing");
+console.log("🔍 ENV CHECK END\n");
+
 const { createClient } = pkg;
 
 const app = express();
@@ -97,6 +107,12 @@ async function parseAndSaveTrades(message) {
 }
 
 // 🚀 Start server
+
+// 🩺 Health check endpoint (for Render)
+app.get("/", (req, res) => {
+  res.status(200).send("OK");
+});
+
 app.listen(PORT, async () => {
   console.log(`🚀 Server running on port ${PORT}`);
   try {

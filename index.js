@@ -1,102 +1,108 @@
 import express from "express";
-import fetch from "node-fetch";
+import TelegramBot from "node-telegram-bot-api";
+import pkg from "@supabase/supabase-js";
 import { DateTime } from "luxon";
+
+const { createClient } = pkg;
 
 const app = express();
 app.use(express.json());
 
-// 🧩 Environment variables
+// 🌍 Config
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
+const WEBHOOK_URL = process.env.WEBHOOK_URL;
 const PORT = process.env.PORT || 10000;
 
-// --- Helper: Send Telegram message ---
-async function sendTelegramMessage(chatId, text) {
-  try {
-    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, text }),
-    });
-  } catch (err) {
-    console.error("❌ Telegram send error:", err.message);
+const bot = new TelegramBot(TELEGRAM_TOKEN);
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// 🪝 Webhook endpoint
+app.post(`/webhook/${TELEGRAM_TOKEN}`, async (req, res) => {
+  const update = req.body;
+  if (!update.message || !update.message.text) return res.sendStatus(200);
+
+  const messageText = update.message.text.trim();
+  console.log("New trade received:", messageText.substring(0, 40) + "...");
+
+  // ✅ Match only daily/dialy reports
+  if (/🧾\s*(DAILY|DIALY)\s*REPORT/i.test(messageText)) {
+    const result = await parseAndSaveTrades(messageText);
+    const reply = `✅ ${result.count} trades imported for ${result.reportDate}`;
+    await bot.sendMessage(update.message.chat.id, reply);
   }
-}
 
-// --- Helper: Parse trade message ---
-function parseTradeMessage(message) {
-  const lines = message.split("\n").map((l) => l.trim());
-  const dateLine = lines.find((l) => /daily|dialy/i.test(l));
-  const reportDate = dateLine ? dateLine.replace("🗓", "").trim() : null;
-  const results = [];
+  res.sendStatus(200);
+});
 
-  let session = null;
-  for (const line of lines) {
-    if (/session/i.test(line)) {
-      session = line.replace(/🌑|🌤|☀️|🌙|SESSION/gi, "").trim();
-    } else if (/✅|❌/.test(line) && /•/.test(line)) {
-      const match = line.match(/(✅\S?)\s*(\S+)\s*•\s*.*?([A-Z]{3}\/[A-Z]{3}).*•\s*(Buy|Sell)/i);
+// 🧠 Parse and save trades
+async function parseAndSaveTrades(message) {
+  // 🗓 Extract report date
+  const dateMatch = message.match(/🗓\s*(.+?)\n/);
+  const reportDateText = dateMatch ? dateMatch[1].trim() : null;
+  const reportDate = reportDateText
+    ? DateTime.fromFormat(reportDateText, "cccc, LLLL d'th,' yyyy", {
+        zone: "UTC-4",
+      }).isValid
+      ? DateTime.fromFormat(reportDateText, "cccc, LLLL d'th,' yyyy", {
+          zone: "UTC-4",
+        }).toISODate()
+      : reportDateText
+    : null;
+
+  // 🧩 Split sessions
+  const sessionBlocks = message.split(/🌑|🌤|☀️|🌙/).slice(1);
+  const sessionNames = ["Overnight", "Morning", "Afternoon", "Night"];
+
+  let allTrades = [];
+
+  sessionBlocks.forEach((block, i) => {
+    const session = sessionNames[i];
+    const lines = block.split("\n").filter((l) => l.includes("•"));
+    lines.forEach((line) => {
+      const match = line.match(
+        /✅([⁰¹²³])?\s*([\d:]+)\s*•.*?([A-Z]{3}\/[A-Z]{3}).*•\s*(Buy|Sell)/i
+      );
       if (match) {
-        const martingale = match[1].match(/\d+/)?.[0] || "0";
+        const martingale = match[1] ? parseInt(match[1]) : 0;
         const time = match[2];
         const pair = match[3];
         const action = match[4];
-        const result = match[1].includes("✅") ? "Win" : "Loss";
-        results.push({ report_date: reportDate, session, time, pair, action, martingale, result });
+        const result = "win"; // all ✅ are wins
+        allTrades.push({
+          report_date: reportDate,
+          session,
+          time,
+          pair,
+          action,
+          martingale,
+          result,
+          source: "telegram",
+          message,
+        });
       }
-    }
+    });
+  });
+
+  // 💾 Save each trade
+  let count = 0;
+  for (const trade of allTrades) {
+    const { error } = await supabase.from("trades_data").insert(trade);
+    if (!error) count++;
+    else console.error("Save error:", error.message);
   }
 
-  return results;
+  return { count, reportDate };
 }
 
-// --- Telegram Webhook ---
-app.post(`/telegram/${TELEGRAM_TOKEN}`, async (req, res) => {
+// 🚀 Start server
+app.listen(PORT, async () => {
+  console.log(`🚀 Server running on port ${PORT}`);
   try {
-    const message = req.body?.message?.text || "";
-    const chatId = req.body?.message?.chat?.id;
-    if (!message || !/daily|dialy/i.test(message)) return res.sendStatus(200);
-
-    console.log("📩 New trade message received");
-    const trades = parseTradeMessage(message);
-    console.log(`🧮 Parsed ${trades.length} trades`);
-
-    if (trades.length > 0) {
-      const payload = trades.map((t) => ({
-        ...t,
-        source: "telegram",
-        message,
-        timestamp: DateTime.now().setZone("America/New_York").toISO(),
-      }));
-
-      const response = await fetch(`${SUPABASE_URL}/rest/v1/trades_data`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          apikey: SUPABASE_KEY,
-          Authorization: `Bearer ${SUPABASE_KEY}`,
-          Prefer: "return=minimal",
-        },
-        body: JSON.stringify(payload),
-      });
-
-      if (!response.ok) {
-        const err = await response.text();
-        console.error("❌ Supabase error:", err);
-      } else {
-        console.log(`✅ ${trades.length} trades saved`);
-        await sendTelegramMessage(chatId, `✅ ${trades.length} trades imported successfully`);
-      }
-    }
-    res.sendStatus(200);
+    await bot.setWebHook(`${WEBHOOK_URL}/webhook/${TELEGRAM_TOKEN}`);
+    console.log("✅ Telegram webhook set successfully.");
   } catch (err) {
-    console.error("🚨 Webhook error:", err);
-    res.sendStatus(500);
+    console.error("❌ Error setting webhook:", err.message);
   }
 });
-
-// --- Health route for Render ---
-app.get("/healthz", (_, res) => res.send("OK"));
-
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));

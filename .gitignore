@@ -1,0 +1,27 @@
+# 🛑 Prevent sensitive files from being uploaded
+.env
+.env.local
+.env.production
+.env.development
+
+# Node dependencies
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# System and editor files
+.DS_Store
+Thumbs.db
+*.log
+
+# Build and runtime artifacts
+/dist
+/build
+/.cache
+
+# Render temporary logs
+render-build.log
+
+# Optional: VSCode or IDE configs
+.vscode/
+.idea/
